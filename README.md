@@ -41,5 +41,3 @@ within input directory and then places the report generated in the output direct
 ```
 python main.py \path\to\video\directory \path\to\output\report\directory
 ```
-- As there isn't a platform independent method to determine whether a file has been completely downloaded/copied, 
-the condition to determine it was written specifically for Windows as it was deployed on a Windows Server.
