@@ -18,6 +18,7 @@ from datetime import datetime as dt
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import utils
 from wordcloud import WordCloud
+from deepface import DeepFace
 
 plt.style.use('ggplot')
 
@@ -30,6 +31,8 @@ split_time = 0
 all_text = ''
 transcript_list = []
 tones = []
+emotions = {}
+is_personality_successful = False
 
 IBM_SPEECH_TO_TEXT_API_KEY = '{apikey}'
 IBM_SPEECH_TO_TEXT_SERVICE_URL = '{url}'
@@ -44,7 +47,8 @@ def get_audio():
     Gets audio.flac from video.mp4
     """
     global VIDEO_PATH
-    # ffmpeg -i ".\video.mp4" -f flac -sample_fmt s16 -ar 16000 audio-file.flac
+    # ffmpeg -i "/content/drive/My Drive/colab_drive/speech-sentiment/video/ElevatorPitchWinner.mp4" -f flac
+    # -sample_fmt s16 -ar 16000 audio-file.flac
 
     command = ['mkdir', os.path.abspath(os.path.join('.', 'temp'))]
     print(*command)
@@ -58,7 +62,7 @@ def get_audio():
 
 def split_audio():
     """
-    Splits audio.flac into 4 equal parts
+    splits audio.flac into 4 equal parts
     """
     global split_time
     command = ['mkdir', SPLIT_PATH]
@@ -82,7 +86,7 @@ def split_audio():
 
 def get_transcript_list():
     """
-    Gets transcript using IBM Speech To Text
+    gets transcript using IBM Speech To Text
     https://www.ibm.com/cloud/watson-speech-to-text
     """
     global all_text, transcript_list
@@ -110,7 +114,7 @@ def get_transcript_list():
 
 def get_vader_sentiment():
     """
-    Gets sentiment scores of audio segment using VADER and saves line graph as sentiment.png
+    gets sentiment scores of audio segment using VADER and saves as sentiment.png
     https://github.com/cjhutto/vaderSentiment
     """
     global transcript_list
@@ -134,7 +138,7 @@ def get_vader_sentiment():
 
 def get_word_cloud():
     """
-    Generates word cloud of transcript and saves it as cloud.png
+    generates word cloud of transcript and saves as cloud.png
     https://github.com/amueller/word_cloud
     """
     global all_text
@@ -144,7 +148,7 @@ def get_word_cloud():
 
 def get_word_frequency_v1():
     """
-    Generates horizontal bar graph of frequency of top 10 used words and saves it as frequency.png
+    generates horizontal bar graph of frequency of top 10 used words and saves as frequency.png
     """
     global all_text
     lemmatizer = WordNetLemmatizer()
@@ -162,18 +166,23 @@ def get_word_frequency_v1():
 
 def get_personality_insights():
     """
-    Generates horizontal bar graph of personality scores using IBM Personality Insights
+    generates horizontal bar graph of personality scores using IBM Personality Insights
     https://www.ibm.com/watson/services/personality-insights/
     """
-    global all_text
+    global all_text, is_personality_successful
     authenticator = IAMAuthenticator(IBM_PERSONALITY_INSIGHTS_API_KEY)
     personality_insights = PersonalityInsightsV3(
         version='2017-10-13',
         authenticator=authenticator
     )
     personality_insights.set_service_url(IBM_PERSONALITY_INSIGHTS_SERVICE_URL)
-    profile = personality_insights.profile(all_text, accept='application/json', raw_scores=True).get_result()
+    try:
+        profile = personality_insights.profile(all_text, accept='application/json', raw_scores=True).get_result()
+    except:
+        is_personality_successful = False
+        return
 
+    is_personality_successful = True
     attributes = ['personality', 'needs', 'values']
     for attr in attributes:
         list_val = []
@@ -190,7 +199,7 @@ def get_personality_insights():
 
 def get_tone_analysis():
     """
-    Gets tones/emotions used in transcript using IBM Watson Tone Analyser
+    gets tones/emotions used in transcript using IBM Watson Tone Analyser
     https://www.ibm.com/watson/services/tone-analyzer/
     """
     global split_time, transcript_list, tones
@@ -213,76 +222,140 @@ def get_tone_analysis():
             for toneType in tone['document_tone']['tones']:
                 time_list.append([split_time * (i - 1), split_time * i])
                 tone_name_list.append(toneType['tone_name'])
-                temp_str = 'Tone: {} was detected from: {} sec to {} sec'.\
+                temp_str = 'Tone: {} was detected from: {} sec to {} sec'. \
                     format(toneType['tone_name'], split_time * (i - 1), split_time * i)
                 tones.append(temp_str)
         i += 1
     print('get_tone_analysis finished')
 
 
+def get_emotions():
+    """
+    gets the emotions recognised from the face of the subject. Uses deepface library.
+    I extract 2 frames per second from the video and then get the proportions of emotions used.
+    https://github.com/serengil/deepface
+    """
+    global VIDEO_PATH, emotions
+    command = ['mkdir', os.path.abspath(os.path.join('.', 'temp', 'frames'))]
+    print(*command)
+    subprocess.run(command, stdout=subprocess.PIPE, stdin=subprocess.PIPE, shell=True)
+
+    #  ffmpeg -y -i .\latest_test_vid.mov -r 2 frames\image.%06d.png
+    command = ['ffmpeg', '-y', '-i', VIDEO_PATH, '-r', '2', os.path.abspath(os.path.join('.', 'temp', 'frames',
+                                                                                         'frame.%06d.png'))]
+    print(*command)
+    subprocess.run(command, stdout=subprocess.PIPE, stdin=subprocess.PIPE, shell=True)
+
+    frames = [os.path.join('.', 'temp', 'frames', x.name) for x in os.scandir(os.path.join('.', 'temp', 'frames'))]
+    obj = DeepFace.analyze(frames, actions=['emotion'], enforce_detection=False)
+
+    emotions = {}
+    for x in obj:
+        try:
+            emotions[obj[x]['dominant_emotion']] += 1
+        except:
+            emotions[obj[x]['dominant_emotion']] = 1
+    total_frames = len(obj)
+    for x in emotions:
+        emotions[x] = int(emotions[x] / total_frames * 1000) / 10
+
+    labels = list(emotions.keys())
+    sizes = list(emotions.values())
+    explode = [0.1] * len(emotions)
+    fig1, ax1 = plt.subplots()
+    ax1.pie(sizes, explode=explode, labels=labels, autopct='%1.1f%%',
+            shadow=True, startangle=90)
+    ax1.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+    fig1.savefig(os.path.join('.', 'temp', 'figures', 'emotions.png'), bbox_inches='tight')
+
+    command = ['del', os.path.abspath(os.path.join('.', 'temp', 'frames', '*.png'))]
+    print(*command)
+    subprocess.run(command, stdout=subprocess.PIPE, stdin=subprocess.PIPE, shell=True)
+
+
 def get_report():
     """
-    Generates PDF report and saves file in user defined output directory using reportlab
+    generates PDF report and saves file in user defined out directory using reportlab
     https://pypi.org/project/reportlab/
     """
-    global REPORT_PATH, tones
+    global REPORT_PATH, tones, emotions
     pdf = canvas.Canvas(os.path.join(REPORT_PATH, 'report_' + dt.now().strftime("%Y_%m_%d_%H_%M_%S") + '.pdf'))
-    pdf.pagewidth = A4[0]   # 595.2755905511812
+    pdf.pagewidth = A4[0]  # 595.2755905511812
     pdf.pageheight = A4[1]  # 841.8897637795277
     pdf.setTitle('Report')
     pdfmetrics.registerFont(TTFont('arial', 'Arial.ttf'))
     pdfmetrics.registerFont(TTFont('calibri', 'Calibri.ttf'))
     pdf.setFont('arial', 32)
-    pdf.drawString(60, A4[1]-75, 'Sentiment Analysis Report')
+    pdf.drawString(60, A4[1] - 75, 'Sentiment Analysis Report')
     pdf.setLineWidth(4)
-    pdf.setStrokeColorRGB(83/255, 137/255, 237/255, 1)
-    pdf.line(55, A4[1]-90, 595-55, A4[1]-90)
+    pdf.setStrokeColorRGB(83 / 255, 137 / 255, 237 / 255, 1)
+    pdf.line(55, A4[1] - 90, 595 - 55, A4[1] - 90)
     pdf.setFont('calibri', 18)
-    pdf.drawString(60, A4[1]-160, 'Sentiment Score vs. Time:')
+    pdf.drawString(60, A4[1] - 160, 'Sentiment Score vs. Time:')
     w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'sentiment.png')).getSize()
     pdf.drawImage(os.path.join('.', 'temp', 'figures', 'sentiment.png'),
-                  x=60, y=A4[1]-530, width=15*cm, height=h/w*15*cm)
+                  x=60, y=A4[1] - 530, width=15 * cm, height=h / w * 15 * cm)
     pdf.drawString(60, 290, 'Word Cloud:')
     w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'cloud.png')).getSize()
     pdf.drawImage(os.path.join('.', 'temp', 'figures', 'cloud.png'),
                   x=60, y=50, width=15 * cm, height=h / w * 15 * cm)
     pdf.showPage()
+
     pdf.setFont('calibri', 18)
-    pdf.drawString(60, A4[1]-100, 'Frequency of words used:')
+    pdf.drawString(60, A4[1] - 100, 'Frequency of words used:')
     w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'frequency.png')).getSize()
     pdf.drawImage(os.path.join('.', 'temp', 'figures', 'frequency.png'),
-                  x=60, y=A4[1]-470, width=15 * cm, height=h / w * 15 * cm)
-    pdf.drawString(60, A4[1] - 530, 'Personality Insights:')
-    w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'personality.png')).getSize()
-    pdf.drawImage(os.path.join('.', 'temp', 'figures', 'personality.png'),
-                  x=60, y=A4[1] - 830, width=15 * cm, height=h / w * 15 * cm)
-    pdf.showPage()
-    pdf.setFont('calibri', 18)
-    pdf.drawString(60, A4[1] - 100, 'Personality Insights:')
-    w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'needs.png')).getSize()
-    pdf.drawImage(os.path.join('.', 'temp', 'figures', 'needs.png'),
-                  x=60, y=A4[1] - 430, width=15 * cm, height=h / w * 15 * cm)
-    w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'values.png')).getSize()
-    pdf.drawImage(os.path.join('.', 'temp', 'figures', 'values.png'),
-                  x=60, y=A4[1] - 800, width=15 * cm, height=h / w * 15 * cm)
-    pdf.showPage()
+                  x=60, y=A4[1] - 470, width=15 * cm, height=h / w * 15 * cm)
+
+    if is_personality_successful:
+        pdf.drawString(60, A4[1] - 530, 'Personality Insights:')
+        w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'personality.png')).getSize()
+        pdf.drawImage(os.path.join('.', 'temp', 'figures', 'personality.png'),
+                      x=60, y=A4[1] - 830, width=15 * cm, height=h / w * 15 * cm)
+        pdf.showPage()
+        pdf.setFont('calibri', 18)
+        pdf.drawString(60, A4[1] - 100, 'Personality Insights:')
+        w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'needs.png')).getSize()
+        pdf.drawImage(os.path.join('.', 'temp', 'figures', 'needs.png'),
+                      x=60, y=A4[1] - 430, width=15 * cm, height=h / w * 15 * cm)
+        w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'values.png')).getSize()
+        pdf.drawImage(os.path.join('.', 'temp', 'figures', 'values.png'),
+                      x=60, y=A4[1] - 800, width=15 * cm, height=h / w * 15 * cm)
+        pdf.showPage()
+    else:
+        pdf.showPage()
+
     pdf.setFont('calibri', 18)
     pdf.drawString(60, A4[1] - 100, 'Tone Insights:')
     pdf.setFont('calibri', 12)
     for i in range(len(tones)):
         pdf.drawString(60, A4[1] - (130 + 20 * i), tones[i])
+    pdf.setFont('calibri', 18)
+    pdf.drawString(60, A4[1] - (170 + 20 * len(tones)), 'Facial Expressions Insights:')
+    pdf.setFont('calibri', 12)
+    pdf.drawString(60, A4[1] - (200 + 20 * len(tones)), 'Following were the distribution of expressions over the '
+                                                        'duration of the video')
+    i = 0
+    for x in emotions:
+        pdf.drawString(60, A4[1] - (220 + 20 * (i + len(tones))), '{}: {}%'.format(str(x).capitalize(), emotions[x]))
+        i += 1
+    w, h = utils.ImageReader(os.path.join('.', 'temp', 'figures', 'emotions.png')).getSize()
+    pdf.drawImage(os.path.join('.', 'temp', 'figures', 'emotions.png'),
+                  x=60, y=A4[1] - (560 + 20 * (i + len(tones))), width=15 * cm, height=h / w * 15 * cm)
     pdf.save()
     print('get_report finished')
 
 
 def start_analysis(file_name, report_dir):
-    global all_text, transcript_list, split_time, VIDEO_PATH, REPORT_PATH, tones
+    global all_text, transcript_list, split_time, VIDEO_PATH, REPORT_PATH, tones, emotions, is_personality_successful
     VIDEO_PATH = file_name
     REPORT_PATH = report_dir
     all_text = ''
     transcript_list = []
     split_time = 0
     tones = []
+    emotions = {}
+    is_personality_successful = False
     get_audio()
     split_audio()
     get_transcript_list()
@@ -291,5 +364,6 @@ def start_analysis(file_name, report_dir):
     get_word_cloud()
     get_personality_insights()
     get_tone_analysis()
+    get_emotions()
     get_report()
     print('Analysis finished')
