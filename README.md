@@ -1,4 +1,8 @@
 ## speech-to-senti-report
+<p align="middle">
+  <img src="https://i.imgur.com/4Yzq22q.png" width="55%" />
+</p>
+
 - As an Intern I wrote this script that generates a PDF report based on sentiment analysis, word cloud, 
 most used words, personality insights, tone analysis and facial expressions from an input video.
 - This script is now in production.
