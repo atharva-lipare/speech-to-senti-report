@@ -1,6 +1,6 @@
 ## speech-to-senti-report
 <p align="middle">
-  <img src="https://i.imgur.com/4Yzq22q.png" width="55%" />
+  <img src="https://i.imgur.com/bpMWk2W.png" width="65%" />
 </p>
 
 - As an Intern I wrote this script that generates a PDF report based on sentiment analysis, word cloud, 
